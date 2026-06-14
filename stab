@@ -1,0 +1,279 @@
+if not game:IsLoaded() then
+	game.Loaded:Wait()
+end
+
+local Stab 	           = getgenv().Stab
+local OldSilentAimPart     = Stab.Silent.Part
+local SilentTarget         = nil
+local AimTarget            = nil
+local DetectedDesync       = false
+local DetectedDesyncV2     = false
+local DetectedUnderGround  = false
+local DetectedUnderGround2 = false
+local DetectedFreeFall     = false
+local AntiAimViewer        = true
+local Script               = {Functions = {}, Drawing = {}}
+
+local Players, Client, Mouse, RS, Camera, GuiS, Uis, Ran =
+    game:GetService("Players"),
+    game:GetService("Players").LocalPlayer,
+    game:GetService("Players").LocalPlayer:GetMouse(),
+    game:GetService("RunService"),
+    game:GetService("Workspace").CurrentCamera,
+    game:GetService("GuiService"),
+    game:GetService("UserInputService"),
+    math.random
+
+Script.Drawing.SilentCircle = Drawing.new("Circle")
+Script.Drawing.SilentCircle.Color = Color3.new(1,1,1)
+Script.Drawing.SilentCircle.Thickness = 1
+
+Script.Functions.Alive = (function(plr)
+    if plr and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") ~= nil and plr.Character:FindFirstChild("Humanoid") ~= nil and plr.Character:FindFirstChild("Head") ~= nil then
+        return true
+    end
+    return false
+end)
+
+Script.Functions.OnScreen = (function(Object)
+    local _, screen = Camera:WorldToScreenPoint(Object.Position)
+    return screen
+end)
+
+Script.Functions.GetMagnitudeFromMouse = (function(Part)
+    local PartPos, OnScreen = Camera:WorldToScreenPoint(Part.Position)
+    if OnScreen then
+        local Magnitude = (Vector2.new(PartPos.X, PartPos.Y) - Vector2.new(Mouse.X, Mouse.Y)).Magnitude
+        return Magnitude
+    end
+    return math.huge
+end)
+
+Script.Functions.VisibleCheck = (function(Part, PartDescendant)
+    local Character = Client.Character or Client.CharacterAdded.Wait(Client.CharacterAdded)
+    local Origin = Camera.CFrame.Position
+    local _, OnScreen = Camera.WorldToViewportPoint(Camera, Part.Position)
+
+    if (OnScreen) then
+        local raycastParams = RaycastParams.new()
+        raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+        raycastParams.FilterDescendantsInstances = {Character, Camera}
+
+        local Result = Workspace.Raycast(Workspace, Origin, Part.Position - Origin, raycastParams)
+
+        if (Result) then
+            local PartHit = Result.Instance
+            local Visible = (not PartHit or Instance.new("Part").IsDescendantOf(PartHit, PartDescendant))
+            
+            return Visible
+        end
+    end
+    return false
+end)
+
+Script.Functions.GetParts = (function(Object)
+    if string.find(Object.Name, "Gun") then
+        return
+    end
+    if table.find({"Part", "MeshPart", "BasePart"}, Object.ClassName) then
+        return true
+    end
+end)
+
+Script.Functions.FindCrew = (function(Player)
+	if Player:FindFirstChild("DataFolder") and Player.DataFolder:FindFirstChild("Information") and Player.DataFolder.Information:FindFirstChild("Crew") and Client:FindFirstChild("DataFolder") and Client.DataFolder:FindFirstChild("Information") and Client.DataFolder.Information:FindFirstChild("Crew") then
+        if Client.DataFolder.Information:FindFirstChild("Crew").Value ~= nil and Player.DataFolder.Information:FindFirstChild("Crew").Value ~= nil and Player.DataFolder.Information:FindFirstChild("Crew").Value ~= "" and Client.DataFolder.Information:FindFirstChild("Crew").Value ~= "" then 
+			return true
+		end
+	end
+	return false
+end)
+
+Script.Functions.GetClosestBodyPart = (function(Char)
+    local Distance = math.huge
+    local ClosestPart = nil
+    local Filterd = {}
+
+    if not (Char and Char:IsA("Model")) then
+        return ClosestPart
+    end
+
+    local Parts = Char:GetChildren()
+    for _, v in pairs(Parts) do
+        if Script.Functions.GetParts(v) and Script.Functions.OnScreen(v) then
+            table.insert(Filterd, v)
+            for _, Part in pairs(Filterd) do                
+                local Magnitude = Script.Functions.GetMagnitudeFromMouse(Part)
+                if Magnitude < Distance then
+                    ClosestPart = Part
+                    Distance = Magnitude
+                end
+            end
+        end
+    end
+    return ClosestPart
+end)
+
+Script.Functions.GetClosestPlayer = (function()
+    local Target = nil
+    local Closest = math.huge
+    local thresholdDistance = 100
+
+    for _, v in pairs(Players:GetPlayers()) do
+        if v.Character and v ~= Client and v.Character:FindFirstChild("HumanoidRootPart") then
+            if not Script.Functions.OnScreen(v.Character.HumanoidRootPart) then 
+                continue 
+            end
+            if Stab.Checks.WallCheck and not Script.Functions.VisibleCheck(v.Character.HumanoidRootPart, v.Character) then 
+                continue 
+            end
+            if Stab.Checks.KoCheck and v.Character:FindFirstChild("BodyEffects") then
+                local KoCheck = v.Character.BodyEffects:FindFirstChild("K.O").Value
+                local Grabbed = v.Character:FindFirstChild("GRABBING_CONSTRAINT") ~= nil
+                if KoCheck or Grabbed then
+                    continue
+                end
+            end
+            if Stab.Checks.VisibleCheck and v.Character:FindFirstChild("Head") then
+                if v.Character.Head.Transparency > 0.5 then
+                    continue
+                end
+            end
+            if Stab.Checks.CrewCheck and Script.Functions.FindCrew(v) and v.DataFolder.Information:FindFirstChild("Crew").Value == Client.DataFolder.Information:FindFirstChild("Crew").Value then
+                continue
+            end
+            local Position = Camera:WorldToScreenPoint(v.Character.HumanoidRootPart.Position)
+            local Distance = ((Vector2.new(Mouse.X, Mouse.Y) - Vector2.new(Position.X, Position.Y)).Magnitude) * 0.6
+            if (Distance < Closest and Script.Drawing.SilentCircle.Radius > Distance and Distance < thresholdDistance) then
+                Closest = Distance
+                Target = v
+            end
+        end
+    end
+
+    SilentTarget = Target
+end)
+
+local OldIndex = nil 
+OldIndex = hookmetamethod(game, "__index", (function(self, Index)
+    if not checkcaller() and Mouse and self == Mouse and Index == "Hit" and Stab.Silent.Enabled and AntiAimViewer then
+        if Script.Functions.Alive(SilentTarget) and Players[tostring(SilentTarget)].Character:FindFirstChild(Stab.Silent.Part) then
+            local EndPoint = nil
+            local TargetPos = Players[tostring(SilentTarget)].Character[Stab.Silent.Part].CFrame
+            local TargetVel = Players[tostring(SilentTarget)].Character.HumanoidRootPart.Velocity
+            local TargetMov = Players[tostring(SilentTarget)].Character.Humanoid.MoveDirection
+
+            if Stab.Resolver.Desync then
+                local Magnitude = TargetVel.magnitude
+                local Magnitude2 = TargetMov.magnitude
+                if Magnitude > 86 then
+                    DetectedDesync = true
+                elseif Magnitude < 1 and Magnitude2 > 0.01 then
+                    DetectedDesync = true
+                elseif Magnitude > 5 and Magnitude2 < 0.01 then
+                    DetectedDesync = true
+                else
+                    DetectedDesync = false
+                end
+            else
+                DetectedDesync = false
+            end
+            if Stab.Checks.AntiGroundShots then
+                if TargetVel.Y < -20 then
+                    DetectedFreeFall = true
+                else
+                    DetectedFreeFall = false
+                end
+            end
+            if Stab.Resolver.UndergroundAA then 
+                if TargetVel.Y < -30 then            
+                    DetectedUnderGround = true
+                else
+                    DetectedUnderGround = false
+                end
+            else
+                DetectedUnderGround = false
+            end
+            
+            if TargetPos ~= nil then
+                if DetectedDesync then
+                    local MoveDirection = TargetMov * 16
+                    EndPoint = TargetPos + (MoveDirection *Stab.Silent.PredictionVelocity)
+                elseif DetectedUnderGround then
+                    EndPoint = TargetPos + (Vector3.new(TargetVel.X, 0, TargetVel.Z) *Stab.Silent.PredictionVelocity)
+                elseif DetectedFreeFall then
+                    EndPoint = TargetPos + (Vector3.new(TargetVel.X, (TargetVel.Y * 0.5), TargetVel.Z) *Stab.Silent.PredictionVelocity)
+                elseif Stab.Silent.PredictMovement then
+                    EndPoint = TargetPos + (Vector3.new(TargetVel.X, (TargetVel.Y * 0.5), TargetVel.Z) *Stab.Silent.PredictionVelocity)
+                else
+                    EndPoint = TargetPos
+                end
+            end
+
+            if EndPoint ~= nil then
+                return (Index == "Hit" and EndPoint)
+            end
+        end
+    end
+    return OldIndex(self, Index)
+end))
+
+Script.Functions.SilentMisc = (function()
+	if Stab.Silent.Enabled then
+       if Script.Functions.Alive(SilentTarget) then
+            if Stab.Silent.UseAirPart then
+                if SilentTarget.Character.Humanoid:GetState() == Enum.HumanoidStateType.Freefall then
+                   Stab.Silent.Part = Stab.Silent.AirPart
+                else
+                   Stab.Silent.Part = OldSilentAimPart
+                end
+            end
+    	end
+	end
+end)
+
+Script.Functions.UpdateFOV = (function()
+    if (not Script.Drawing.SilentCircle) then
+        return Script.Drawing.SilentCircle
+    end
+    Script.Drawing.SilentCircle.Visible = Stab.SilentFOV.Visible
+    Script.Drawing.SilentCircle.Color = Stab.SilentFOV.Color
+    Script.Drawing.SilentCircle.Filled = Stab.SilentFOV.Filled
+    Script.Drawing.SilentCircle.Transparency = Stab.SilentFOV.Transparency
+    Script.Drawing.SilentCircle.Position = Vector2.new(Mouse.X, Mouse.Y + GuiS:GetGuiInset().Y)
+	Script.Drawing.SilentCircle.Radius = Stab.SilentFOV.Radius * 3
+end)
+
+RS.Heartbeat:Connect((function()
+    Script.Functions.GetClosestPlayer()
+    Script.Functions.SilentMisc()
+end))
+
+RS.RenderStepped:Connect((function()
+    Script.Functions.UpdateFOV()
+    if Stab.Silent.Enabled and Script.Functions.Alive(AimTarget) and Stab.Silent.ClosestPart and Script.Functions.Alive(SilentTarget) then
+        local currentpart = tostring(Script.Functions.GetClosestBodyPart(AimTarget.Character))
+        if Stab.Silent.ClosestPart then
+            Stab.Silent.Part = currentpart
+            OldSilentAimPart = Stab.Silent.Part
+        end
+        return
+    end
+    if Stab.Silent.Enabled then
+        if Stab.Silent.ClosestPart and Script.Functions.Alive(SilentTarget) then
+            Stab.Silent.Part = tostring(Script.Functions.GetClosestBodyPart(SilentTarget.Character))
+            OldSilentAimPart = Stab.Silent.Part
+        end
+    end
+end))
+for _, collectedItem in pairs(getgc(true)) do
+    if pcall(function() return rawget(collectedItem, "indexInstance") end) then
+        local indexInstanceProperty = rawget(collectedItem, "indexInstance")
+        if type(indexInstanceProperty) == "table" and indexInstanceProperty[1] == "kick" then
+            collectedItem.kickHandler = {
+                "kick",
+                function() wait(9e9) return coroutine.yield() end
+            }
+        end
+    end
+end
